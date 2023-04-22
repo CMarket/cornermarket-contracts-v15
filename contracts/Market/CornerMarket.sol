@@ -256,7 +256,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         emit BuyCoupon(realFrom, id, amount, cms.payToken, payAmount, receiver);
         stats.sold += amount;
         if (isLite) {
-            liteKeeping[realFrom][id] += amount;
+            liteKeeping[receiver][id] += amount;
         } else {
         IVoucher(couponContract).mint(receiver, id, amount, "");
         }
