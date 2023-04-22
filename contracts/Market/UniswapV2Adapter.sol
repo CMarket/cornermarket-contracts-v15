@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: CC0-1.0
+pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./library/TransferHelper.sol";
 import "./interfaces/ICornerMarket.sol";
 import "./interfaces/IUniswapV2Router.sol";
+import "../Uniswap/interface/IUniswapV2Factory.sol";
+import "../Uniswap/interface/IUniswapV2Pair.sol";
 import {IAllowanceTransferNFT} from "../permit2/interfaces/IAllowanceTransferNFT.sol";
 
 contract UniswapV2Adapter is Ownable {
@@ -29,7 +32,7 @@ contract UniswapV2Adapter is Ownable {
         feeRate = newRate;
     }
 
-    function estimateInfo(uint id, uint amount, address userPayToken) external view returns (uint payAmount,uint fee,uint slippage){
+    function estimateInfo(uint id, uint amount, address userPayToken,uint maxSlippage) external view returns (uint payAmount,uint maxPayAmount,uint midAmount,uint fee,uint currentSlippage){
         (,,address couponPayToken,uint pricePerCoupon,,,,,,) = cornermarket.coupons(id);
         uint requiredAmount = pricePerCoupon * amount;
         uint requiredAmountWithFee = requiredAmount * (ONE_HUNDRED_RATE + feeRate) / ONE_HUNDRED_RATE;
@@ -37,7 +40,7 @@ contract UniswapV2Adapter is Ownable {
         path[0] = userPayToken;
         path[1] = couponPayToken;
         payAmount = dexRouter.getAmountsIn(requiredAmountWithFee, path)[0];
-        fee = requiredAmountWithFee - requiredAmount;
+        fee = payAmount * feeRate / ONE_HUNDRED_RATE;
         IUniswapV2Factory factory = IUniswapV2Factory(dexRouter.factory());
         address pair = factory.getPair(userPayToken,couponPayToken);
         require(pair != address(0),"pair does not exist");
@@ -52,10 +55,17 @@ contract UniswapV2Adapter is Ownable {
             couponPayReserves = reserves1;
             userPayReserves = reserves0;
         }
-        // requiredAmountWithFee / midAmount  =        couponPayReserves / userPayReserves
-        uint midAmount = requiredAmountWithFee * userPayReserves / couponPayReserves;
+        // requiredAmountWithFee / midAmount  =  couponPayReserves / userPayReserves
+        midAmount = requiredAmountWithFee * userPayReserves / couponPayReserves;
         require(midAmount <= payAmount,"amount error");
-        slippage = (payAmount - midAmount) * 1e18 / midAmount;
+        currentSlippage = (payAmount - midAmount) * 1e18 / midAmount;
+        // maxSlippage = (maxPayAmount - midAmount) * 1e18 / midAmount
+        maxPayAmount = max(maxSlippage,currentSlippage) * midAmount / 1e18 + midAmount;
+        
+    }
+
+    function max(uint a,uint b) internal pure returns(uint){
+        return a > b?a:b;
     }
 
     function buyCoupon(uint id, uint amount, address receiver, IAllowanceTransferNFT.PermitSingle calldata _permit, bytes calldata _signature) external {
