@@ -279,6 +279,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
 
     function verifyCoupon(uint id, uint amount, bool isLite) external {
         if (isLite) {
+            require(liteKeeping[msg.sender][id] >= amount, "insufficient coupon");
             liteKeeping[msg.sender][id] -= amount;
         } else {
         IVoucher(couponContract).safeTransferFrom(msg.sender, address(this), id, amount, "");
@@ -349,6 +350,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
 
     function refundCoupon(uint id, uint amount, address receiver, bool isLite) external {
         if (isLite) {
+            require(liteKeeping[msg.sender][id] >= amount, "insufficient coupon");
             liteKeeping[msg.sender][id] -= amount;
         } else {
         IVoucher(couponContract).safeTransferFrom(msg.sender, address(this), id, amount, "");
