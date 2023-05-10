@@ -20,6 +20,7 @@ contract UniswapV2Adapter is Ownable {
     event BuyCoupon(uint id, uint amount, address receiver, address payToken, uint payTokenAmount);
 
     constructor(address _cornermarket, address _permit, address dex, uint _feeRate) {
+        require(_feeRate < ONE_HUNDRED_RATE, "feeRate too high");
         cornermarket = ICornerMarket(_cornermarket);
         permit2 = IAllowanceTransferNFT(_permit);
         dexRouter = IUniswapV2Router(dex);
