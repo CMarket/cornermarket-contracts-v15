@@ -56,6 +56,7 @@ contract AgentManager is EIP712Base, AccessControl, ReentrancyGuard {
     }
 
     function depositBehalf(address user, IAllowanceTransferNFT.PermitSingle calldata _permit, bytes calldata _signature) external {
+        require(_permit.details.token == payToken, "unmatched token");
         permit2.permit(user, _permit, _signature);
         permit2.transferFrom(user, address(this), uint160(depositAmount), _permit.details.token);
         _deposit(user);
