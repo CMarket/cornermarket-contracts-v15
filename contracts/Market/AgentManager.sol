@@ -3,12 +3,14 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 import "./library/TransferHelper.sol";
 import "./interfaces/ICornerMarket.sol";
 import {SignatureVerification} from "../permit2/libraries/SignatureVerification.sol";
 import {SignatureExpired, InvalidNonce} from "../permit2/PermitErrors.sol";
 import {IAllowanceTransferNFT} from "../permit2/interfaces/IAllowanceTransferNFT.sol";
 import {EIP712Base} from "./EIP712Base.sol";
+import {SafeCast160} from "../permit2/libraries/SafeCast160.sol";
 
 contract AgentManager is EIP712Base, AccessControl, ReentrancyGuard {
     using SignatureVerification for bytes;
@@ -44,6 +46,7 @@ contract AgentManager is EIP712Base, AccessControl, ReentrancyGuard {
     }
 
     function deposit() external {
+        require(!Address.isContract(msg.sender), "EOA only");
         TransferHelper.safeTransferFrom(payToken, msg.sender, address(this), depositAmount);
         _deposit(msg.sender);
     }
@@ -58,7 +61,7 @@ contract AgentManager is EIP712Base, AccessControl, ReentrancyGuard {
     function depositBehalf(address user, IAllowanceTransferNFT.PermitSingle calldata _permit, bytes calldata _signature) external {
         require(_permit.details.token == payToken, "unmatched token");
         permit2.permit(user, _permit, _signature);
-        permit2.transferFrom(user, address(this), uint160(depositAmount), _permit.details.token);
+        permit2.transferFrom(user, address(this), SafeCast160.toUint160(depositAmount), _permit.details.token);
         _deposit(user);
     }
     
@@ -95,6 +98,9 @@ contract AgentManager is EIP712Base, AccessControl, ReentrancyGuard {
     }
 
     function validate(address user) external view returns(bool) {
+        if (Address.isContract(user)) {
+            return false;
+        }
         return validateBook[user] || (depositAmount == 0);
     }
     function deduct(address account, uint amount) external onlyRole(OPERATOR_ROLE) {

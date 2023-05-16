@@ -13,7 +13,10 @@ import {SignatureExpired, InvalidNonce} from "./PermitErrors.sol";
 contract AllowanceTransferPlus is AllowanceTransfer, IAllowanceTransferNFT {
     using SignatureVerification for bytes;
     using PermitNFTHash for PermitNFTSingle;
+    using PermitNFTHash for PermitBuyNFTSingle;
     using Allowance for PackedAllowance;
+    uint constant NFT_TYPE_ERC721 = 1;
+    uint constant NFT_TYPE_ERC1155 = 2;
 
     // mapping(address => mapping(address => mapping(address => PackedAllowance))) public allowance;
     mapping(address => mapping(address => mapping(uint => mapping(address => PackedAllowance)))) public allowanceNFT;
@@ -57,9 +60,13 @@ contract AllowanceTransferPlus is AllowanceTransfer, IAllowanceTransferNFT {
         }
 
         // Transfer the tokens from the from address to the recipient.
-        if (typeId == 1) {
+        if (typeId == NFT_TYPE_ERC721) {
+            bool isERC721 = IERC721(token).supportsInterface(type(IERC721).interfaceId);
+            require(isERC721, "token is not ERC721");
             IERC721(token).safeTransferFrom(from, to, tokenId, "");
-        } else if (typeId == 2) {
+        } else if (typeId == NFT_TYPE_ERC1155) {
+            bool isERC1155 = IERC1155(token).supportsInterface(type(IERC1155).interfaceId);
+            require(isERC1155, "token is not ERC1155");
             IERC1155(token).safeTransferFrom(from, to, tokenId, amount, "");
         }
     }
@@ -110,5 +117,12 @@ contract AllowanceTransferPlus is AllowanceTransfer, IAllowanceTransferNFT {
 
         allowed.updateAll(amount, expiration, nonce);
         emit PermitNFT(owner, token, spender, tokenId, amount, expiration, nonce);
+    }
+    function permitBuyNFT(address owner, PermitBuyNFTSingle calldata permitSingle, bytes calldata signature) external {
+        if (block.timestamp > permitSingle.sigDeadline) revert SignatureExpired(permitSingle.sigDeadline);
+
+        // Verify the signer address from the signature.
+        signature.verify(_hashTypedData(permitSingle.hash()), owner);
+        _updateApproval(permitSingle.details, owner, permitSingle.spender);
     }
 }

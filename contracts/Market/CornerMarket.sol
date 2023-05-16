@@ -14,6 +14,7 @@ import {SignatureVerification} from "../permit2/libraries/SignatureVerification.
 import {SignatureExpired, InvalidNonce} from "../permit2/PermitErrors.sol";
 import {PermitNFTHash} from "../permit2/libraries/PermitNFTHash.sol";
 import {EIP712Base} from "./EIP712Base.sol";
+import {SafeCast160} from "../permit2/libraries/SafeCast160.sol";
 
 contract CornerMarketStorage {
     uint constant HUNDRED_PERCENT = 10000;
@@ -251,7 +252,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         if (from == address(0)) {
             TransferHelper.safeTransferFrom(cms.payToken, msg.sender, address(this), payAmount);
         } else {
-            permit2.transferFrom(from, address(this), uint160(payAmount), cms.payToken);
+            permit2.transferFrom(from, address(this), SafeCast160.toUint160(payAmount), cms.payToken);
         }
         emit BuyCoupon(realFrom, id, amount, cms.payToken, payAmount, receiver);
         stats.sold += amount;

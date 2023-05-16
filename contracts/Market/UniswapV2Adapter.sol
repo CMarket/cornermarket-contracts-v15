@@ -8,6 +8,7 @@ import "./interfaces/IUniswapV2Router.sol";
 import "../Uniswap/interface/IUniswapV2Factory.sol";
 import "../Uniswap/interface/IUniswapV2Pair.sol";
 import {IAllowanceTransferNFT} from "../permit2/interfaces/IAllowanceTransferNFT.sol";
+import {SafeCast160} from "../permit2/libraries/SafeCast160.sol";
 
 contract UniswapV2Adapter is Ownable {
     uint constant ONE_HUNDRED_RATE = 10000;
@@ -69,23 +70,22 @@ contract UniswapV2Adapter is Ownable {
         return a > b?a:b;
     }
 
-    function buyCoupon(uint id, uint amount, address receiver, IAllowanceTransferNFT.PermitSingle calldata _permit, bytes calldata _signature) external {
-        permit2.permit(receiver, _permit, _signature);
-        (,,address payToken,uint pricePerCoupon,,,,,,) = cornermarket.coupons(id);
-        uint requiredAmount = pricePerCoupon * amount;
+    function buyCoupon(address receiver, IAllowanceTransferNFT.PermitBuyNFTSingle calldata _permit, bytes calldata _signature) external {
+        permit2.permitBuyNFT(receiver, _permit, _signature);
+        (,,address payToken,uint pricePerCoupon,,,,,,) = cornermarket.coupons(_permit.tokenId);
+        uint requiredAmount = pricePerCoupon * _permit.nftAmount;
         uint requiredAmountWithFee = requiredAmount * (ONE_HUNDRED_RATE + feeRate) / ONE_HUNDRED_RATE;
         address[] memory path = new address[](2);
         path[0] = _permit.details.token;
         path[1] = payToken;
         uint requiredAmountIn = dexRouter.getAmountsIn(requiredAmountWithFee, path)[0];
-        // require(payToken == _permit.details.token, "token not match");
         require(requiredAmountIn <= _permit.details.amount, "insufficient approve");
-        permit2.transferFrom(receiver, address(this), uint160(requiredAmountIn), _permit.details.token);
+        permit2.transferFrom(receiver, address(this), SafeCast160.toUint160(requiredAmountIn), _permit.details.token);
         IERC20(_permit.details.token).approve(address(dexRouter), requiredAmountIn);
-        emit BuyCoupon(id, amount, receiver, _permit.details.token, requiredAmountIn);
+        emit BuyCoupon(_permit.tokenId, _permit.nftAmount, receiver, _permit.details.token, requiredAmountIn);
         dexRouter.swapTokensForExactTokens(requiredAmountWithFee, requiredAmountIn, path, address(this), block.timestamp + 1000);
         IERC20(payToken).approve(address(cornermarket), requiredAmount);
-        cornermarket.buyCoupon(id, amount, receiver, address(0), true);
+        cornermarket.buyCoupon(_permit.tokenId, _permit.nftAmount, receiver, address(0), true);
     }
 
     function withdrawFee(address token) external onlyOwner {
