@@ -58,16 +58,21 @@ contract UniswapV2Adapter is Ownable {
             userPayReserves = reserves0;
         }
         // requiredAmountWithFee / midAmount  =  couponPayReserves / userPayReserves
-        midAmount = requiredAmountWithFee * userPayReserves / couponPayReserves;
+        midAmount = (requiredAmountWithFee * userPayReserves) / couponPayReserves;
         require(midAmount <= payAmount,"amount error");
-        currentSlippage = (payAmount - midAmount) * 1e18 / midAmount;
+        currentSlippage = ceil((payAmount - midAmount) * 1e18,midAmount);
         // maxSlippage = (maxPayAmount - midAmount) * 1e18 / midAmount
         maxPayAmount = max(maxSlippage,currentSlippage) * midAmount / 1e18 + midAmount;
-        
+
     }
 
     function max(uint a,uint b) internal pure returns(uint){
         return a > b?a:b;
+    }
+
+    function ceil(uint numerator, uint denominator) internal pure returns(uint) {
+        require(denominator > 0,"denominator can't be 0");
+        return (numerator + denominator - 1) / denominator;
     }
 
     function buyCoupon(address receiver, IAllowanceTransferNFT.PermitBuyNFTSingle calldata _permit, bytes calldata _signature) external {

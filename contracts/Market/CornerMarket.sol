@@ -148,6 +148,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         require(meta.saleEnd > meta.saleStart, "sale time error");
         require(meta.useEnd > meta.useStart, "use time error");
         require(meta.saleEnd - meta.saleStart <= maxSalePeriod, "sale time error");
+        require(meta.useEnd > meta.saleStart, "use time conflict with sale time");
         require(supportTokens[meta.payToken], "token not supported");
         require(IAgentManager(agentManager).validate(agent), "referrer is not a valid agent");
         require(meta.refundTaxRate <= REFUND_TAX_RATE_MAX, "exceed max refund tax rate");
@@ -242,7 +243,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         _buyCoupon(id, amount, receiver, referrer, address(0), isLite);
     }
     function _buyCoupon(uint id, uint amount, address receiver, address referrer, address from, bool isLite) internal nonReentrant {
-        CouponMetadataStorage storage cms = coupons[id];
+        CouponMetadataStorage memory cms = coupons[id];
         CouponStatistics storage stats = couponsQuota[id];
         require(cms.status == CouponStatus.SELLING, "coupon not for sale");
         require(stats.sold + amount - stats.refund <= stats.quota, "exceed quota");
@@ -290,7 +291,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
     }
 
     function _verifyCoupon(uint id, uint amount, address from) internal nonReentrant {
-        CouponMetadataStorage storage cms = coupons[id];
+        CouponMetadataStorage memory cms = coupons[id];
         CouponStatistics storage stats = couponsQuota[id];
         require(getBlockTimestamp() >= cms.useStart && getBlockTimestamp() <= cms.useEnd, "out of use day ranges");
         uint totalAmount = cms.pricePerCoupon * amount;
@@ -298,7 +299,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         emit Verified(id, amount, from, cms.payToken, totalAmount);
             if (buyReferrerRewardRate > 0) {
                 uint referrerReward = totalAmount * buyReferrerRewardRate / HUNDRED_PERCENT;
-            Referralship storage ref = referrals[from];
+            Referralship memory ref = referrals[from];
                 address referrerAddress = ref.referrer;
                 if (referrerAddress == address(0) || getBlockTimestamp() > ref.expires) {
                     referrerAddress = platformAccount;
@@ -360,7 +361,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         _refundCoupon(id, amount, receiver, msg.sender);
     }
     function _refundCoupon(uint id, uint amount, address receiver, address from) internal nonReentrant {
-        CouponMetadataStorage storage cms = coupons[id];
+        CouponMetadataStorage memory cms = coupons[id];
         CouponStatistics storage stats = couponsQuota[id];
 
         uint refundAmount = cms.pricePerCoupon * amount;
