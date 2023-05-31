@@ -68,10 +68,6 @@ contract CornerMarketStorage {
         mapping(address => uint) earnings;
         mapping(address => uint) withdrawn;
     }
-    struct Referralship{
-        address referrer;
-        uint expires;
-    }
     struct CreateBehalf{
         CouponMetadata coupon;
         uint48 nonce;
@@ -82,7 +78,6 @@ contract CornerMarketStorage {
     mapping(uint => CouponStatistics) public couponsQuota;
     mapping(address => bool) public supportTokens;
     mapping(address => Withdrawable) internal revenue;
-    mapping(address => Referralship) referrals;
     address public couponContract;
     uint public protectPeriod;
     uint public maxSalePeriod;
@@ -91,6 +86,7 @@ contract CornerMarketStorage {
     uint public platformRewardRate;
     address public platformAccount;
     address public agentManager;
+    address public buyReferrerRewardHolder;
     mapping(address => uint) public referrerExitTime;
     // mapping: user address => tokenId => amount
     mapping(address => mapping(uint => uint)) public liteKeeping;
@@ -112,7 +108,8 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
     event SupportTokenChange(address indexed token, bool newState, bool oldState);
     event BuyCoupon(address indexed payer, uint tokenId, uint amount, address payToken, uint payAmount, address indexed receiver);
     event Refund(uint tokenId, uint amount, address payer, address payToken, uint payAmount, address indexed receiver);
-    event ReferrerUpdate(address indexed newReferrer, address oldReferrer, uint newExpire);
+    event BuyerReferrer(address indexed buyer, address referrer, uint tokenId, uint amount);
+    event BuyReferrerRewardHolderChange(address newHolder, address oldHolder);
     event ReferrerRewardRateChange(RewardRateTarget target, uint newRewardRate, uint oldRewardRate);
     event PlatformAccountChange(address indexed newPlatformAccount, address oldPlatformAccount);
     event Verified(uint tokenId, uint amount, address indexed fromAccount, address indexed payToken, uint totalAmount);
@@ -127,8 +124,9 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
     event WithdrawNFT(address indexed receiver, uint tokenId, uint amount);
     event DepositNFT(address indexed payer, uint tokenId, uint amount);
 
-    constructor(address voucher, address _platformAccount, address _permit2) EIP712Base("CornerMarket") {
+    constructor(address voucher, address _platformAccount, address referrerRewardHolder, address _permit2) EIP712Base("CornerMarket") {
         require(_platformAccount != address(0), "invalid platform account");
+        require(referrerRewardHolder != address(0), "invalid platform account");
         permit2 = IAllowanceTransferNFT(_permit2);
         protectPeriod = 180 days;
         maxSalePeriod = 400 days;
@@ -137,6 +135,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         platformRewardRate = 100; // 100 = 1%
         couponContract = voucher;
         platformAccount = _platformAccount;
+        buyReferrerRewardHolder = referrerRewardHolder;
         _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _setupRole(OPERATOR_ROLE, msg.sender);
     }
@@ -185,10 +184,6 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         _updateNonce(behalf.nonce, agent, behalf.sigDeadline);
         _createCoupon(behalf.coupon, agent);
     }
-    
-    // function setCouponContract(address voucher) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    //     couponContract = voucher;
-    // }
 
     function blockCoupon(uint id) external onlyRole(OPERATOR_ROLE) {
         CouponMetadataStorage storage cms = coupons[id];
@@ -230,6 +225,11 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         agentManager = _agentManager;
     }
 
+    function setBuyReferrerRewardHolder(address holder) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(holder != address(0), "invalid address");
+        emit BuyReferrerRewardHolderChange(holder, buyReferrerRewardHolder);
+        buyReferrerRewardHolder = holder;
+    }
     function setProtectPeriod(uint period) external onlyRole(DEFAULT_ADMIN_ROLE) {
         emit ProtectPeriodChange(period, protectPeriod);
         protectPeriod = period;
@@ -262,13 +262,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         } else {
         IVoucher(couponContract).mint(receiver, id, amount, "");
         }
-        Referralship storage ref = referrals[receiver];
-        if (ref.referrer == address(0) && referrer != address(0)) {
-            uint nextExpire = getBlockTimestamp() + protectPeriod;
-            emit ReferrerUpdate(referrer, ref.referrer, nextExpire);
-            ref.referrer = referrer;
-            ref.expires = nextExpire;
-        }
+        emit BuyerReferrer(receiver, referrer, id, amount);
     }
 
     function buyCouponBehalf(uint id, uint amount, address receiver, address referrer, address from, bool isLite, IAllowanceTransferNFT.PermitSingle calldata _permit, bytes calldata _signature) external {
@@ -297,19 +291,12 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         uint totalAmount = cms.pricePerCoupon * amount;
         uint assignableAmount = totalAmount;
         emit Verified(id, amount, from, cms.payToken, totalAmount);
-            if (buyReferrerRewardRate > 0) {
-                uint referrerReward = totalAmount * buyReferrerRewardRate / HUNDRED_PERCENT;
-            Referralship memory ref = referrals[from];
-                address referrerAddress = ref.referrer;
-                if (referrerAddress == address(0) || getBlockTimestamp() > ref.expires) {
-                    referrerAddress = platformAccount;
-                }
-                //referrer get paid and remove this part from total
-                revenue[referrerAddress].earnings[cms.payToken] += referrerReward;
-                _withdraw(cms.payToken, referrerAddress);
-                emit Settlement(id, PROFIT_TYPE_BUY_REFERRER, referrerAddress, cms.payToken, referrerReward);
-                assignableAmount -= referrerReward;
-            }
+        if (buyReferrerRewardRate > 0) {
+            uint referrerReward = totalAmount * buyReferrerRewardRate / HUNDRED_PERCENT;
+            TransferHelper.safeTransfer(cms.payToken, buyReferrerRewardHolder, referrerReward);
+            emit Settlement(id, PROFIT_TYPE_BUY_REFERRER, buyReferrerRewardHolder, cms.payToken, referrerReward);
+            assignableAmount -= referrerReward;
+        }
             if (couponReferrerRewardRate > 0) {
                 uint referrerReward = totalAmount * couponReferrerRewardRate / HUNDRED_PERCENT;
                 address referrerAddress = cms.referrer;

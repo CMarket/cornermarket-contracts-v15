@@ -14,7 +14,7 @@ library PermitNFTHash {
         "PermitNFTSingle(PermitNFTDetails details,address spender,uint256 sigDeadline)PermitNFTDetails(address token,uint248 tokenId,uint8 typeId,uint160 amount,uint48 expiration,uint48 nonce)"
     );
     bytes32 public constant _PERMIT_SINGLE_BUY_NFT_TYPEHASH = keccak256(
-        "PermitNFTSingle(PermitDetails details,uint256 tokenId,uint8 typeId,uint256 nftAmount,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"
+        "PermitBuyNFTSingle(PermitDetails details,uint256 tokenId,uint8 typeId,uint256 nftAmount,address spender,uint256 sigDeadline)PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"
     );
 
     function hash(IAllowanceTransferNFT.PermitNFTSingle memory permitSingle) internal pure returns (bytes32) {
