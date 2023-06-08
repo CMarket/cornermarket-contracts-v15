@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: CC0-1.0
 pragma solidity ^0.8.17;
-import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/security/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./library/TransferHelper.sol";
 import "./interfaces/IVoucher.sol";
-import "./interfaces/IAgentManager.sol";
+import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IAllowanceTransferNFT} from "../permit2/interfaces/IAllowanceTransferNFT.sol";
 import {SignatureVerification} from "../permit2/libraries/SignatureVerification.sol";
 import {SignatureExpired, InvalidNonce} from "../permit2/PermitErrors.sol";
@@ -48,7 +49,7 @@ contract CornerMarketStorage {
     }
     struct CouponMetadataStorage{
         address owner;
-        address referrer;
+        uint agentNFTId;
         address payToken;
         uint pricePerCoupon;
         uint saleStart;
@@ -85,25 +86,26 @@ contract CornerMarketStorage {
     uint public couponReferrerRewardRate;
     uint public platformRewardRate;
     address public platformAccount;
-    address public agentManager;
+    address public agentNFT;
     address public buyReferrerRewardHolder;
-    mapping(address => uint) public referrerExitTime;
+    // mapping: tokenId => buyer address => referrer address
+    mapping(uint => mapping(address => address)) public referrals;
     // mapping: user address => tokenId => amount
     mapping(address => mapping(uint => uint)) public liteKeeping;
     mapping(address => uint48) public liteNonce;
 }
 
-contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC1155Receiver, ReentrancyGuard {
+contract CornerMarket is Initializable, AccessControlUpgradeable, ReentrancyGuardUpgradeable, CornerMarketStorage, EIP712Base, IERC1155Receiver {
     using Counters for Counters.Counter;
     using SignatureVerification for bytes;
     using PermitNFTHash for IAllowanceTransferNFT.PermitNFTSingle;
-    IAllowanceTransferNFT internal immutable permit2;
+    IAllowanceTransferNFT internal permit2;
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
     bytes32 public constant _COUPON_METADATA =
         keccak256("CouponMetadata(address owner,address payToken,uint256 pricePerCoupon,uint256 saleStart,uint256 saleEnd,uint256 useStart,uint256 useEnd,uint256 quota,uint256 refundTaxRate)");
     bytes32 public constant _CREATE_BEHALF_DATA =
         keccak256("CreateBehalf(CouponMetadata coupon,uint48 nonce,uint256 sigDeadline)CouponMetadata(address owner,address payToken,uint256 pricePerCoupon,uint256 saleStart,uint256 saleEnd,uint256 useStart,uint256 useEnd,uint256 quota,uint256 refundTaxRate)");
-    event CouponCreated(uint tokenId, CouponMetadata meta, address referrer);
+    event CouponCreated(uint tokenId, CouponMetadata meta, uint agentNFTId);
     event CouponStatusChange(uint tokenId, CouponStatus newStatus, CouponStatus oldStatus);
     event SupportTokenChange(address indexed token, bool newState, bool oldState);
     event BuyCoupon(address indexed payer, uint tokenId, uint amount, address payToken, uint payAmount, address indexed receiver);
@@ -116,46 +118,51 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
     event Settlement(uint tokenId, uint profitType, address indexed account, address payToken, uint sharedAmount);
     event WithdrawEarnings(address indexed account, address payToken, uint amount);
     event CouponSaleTimeExtended(uint tokenId, uint newEndTime, uint oldEndTime);
-    event Take(address account, address token, uint takeAmount);
-    event ReferrerExitTimeExtended(address account, uint newExitTime, uint oldExitTime);
-    event AgentManagerChange(address newAgentManager, address oldAgentManager);
+    event Withdraw(address account, address token, uint withdrawAmount);
+    event AgentNFTChange(address newAgentNFT, address oldAgentNFT);
     event ProtectPeriodChange(uint newPeriod, uint oldPeriod);
     event MaxSalePeriodChange(uint newPeriod, uint oldPeriod);
     event WithdrawNFT(address indexed receiver, uint tokenId, uint amount);
     event DepositNFT(address indexed payer, uint tokenId, uint amount);
+    event BuyCouponReferrerLog(uint indexed tokenId, address indexed buyer, address referrer, address payToken, uint totalAmount);
 
-    constructor(address voucher, address _platformAccount, address referrerRewardHolder, address _permit2) EIP712Base("CornerMarket") {
+    function initialize(address voucher, address _platformAccount, address referrerRewardHolder, address _permit2) public initializer {
         require(_platformAccount != address(0), "invalid platform account");
         require(referrerRewardHolder != address(0), "invalid platform account");
-        permit2 = IAllowanceTransferNFT(_permit2);
         protectPeriod = 180 days;
         maxSalePeriod = 400 days;
         buyReferrerRewardRate = 0; // 0 = 0%   10000 = 100%
         couponReferrerRewardRate = 100; // 100 = 1%
         platformRewardRate = 100; // 100 = 1%
+        permit2 = IAllowanceTransferNFT(_permit2);
         couponContract = voucher;
         platformAccount = _platformAccount;
         buyReferrerRewardHolder = referrerRewardHolder;
+        __EIP712_init("CornerMarket");
+        __AccessControl_init();
+        __ReentrancyGuard_init();
         _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _setupRole(OPERATOR_ROLE, msg.sender);
     }
     
-    function createCoupon(CouponMetadata memory meta) external {
-        _createCoupon(meta, msg.sender);
+    function createCoupon(CouponMetadata memory meta, uint agentNFTId) external {
+        address agent = IERC721(agentNFT).ownerOf(agentNFTId);
+        require(agent == msg.sender, "agent only");
+        _createCoupon(meta, agentNFTId);
     }
-    function _createCoupon(CouponMetadata memory meta, address agent) internal {
+    function _createCoupon(CouponMetadata memory meta, uint agentNFTId) internal {
         require(meta.saleEnd > meta.saleStart, "sale time error");
         require(meta.useEnd > meta.useStart, "use time error");
         require(meta.saleEnd - meta.saleStart <= maxSalePeriod, "sale time error");
         require(meta.useEnd > meta.saleStart, "use time conflict with sale time");
         require(supportTokens[meta.payToken], "token not supported");
-        require(IAgentManager(agentManager).validate(agent), "referrer is not a valid agent");
+        require(IERC721(agentNFT).ownerOf(agentNFTId) != address(0), "referrer is not a valid agent");
         require(meta.refundTaxRate <= REFUND_TAX_RATE_MAX, "exceed max refund tax rate");
         tokenId.increment();
         uint id = tokenId.current();
         coupons[id] = CouponMetadataStorage({
             owner: meta.owner,
-            referrer: agent,
+            agentNFTId: agentNFTId,
             payToken: meta.payToken,
             pricePerCoupon: meta.pricePerCoupon,
             saleStart: meta.saleStart,
@@ -172,17 +179,14 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
             verified: 0
         });
 
-        emit CouponCreated(id, meta, agent);
-        if (meta.useEnd > referrerExitTime[agent]) {
-            emit ReferrerExitTimeExtended(agent, meta.useEnd, referrerExitTime[agent]);
-            referrerExitTime[agent] = meta.useEnd;
-        }
+        emit CouponCreated(id, meta, agentNFTId);
     }
 
-    function createCouponBehalf(CreateBehalf memory behalf, address agent, bytes calldata _signature) external {
+    function createCouponBehalf(CreateBehalf memory behalf, uint agentNFTId, bytes calldata _signature) external {
+        address agent = IERC721(agentNFT).ownerOf(agentNFTId);
         _signature.verify(_hashTypedData(getHash(behalf)), agent);
         _updateNonce(behalf.nonce, agent, behalf.sigDeadline);
-        _createCoupon(behalf.coupon, agent);
+        _createCoupon(behalf.coupon, agentNFTId);
     }
 
     function blockCoupon(uint id) external onlyRole(OPERATOR_ROLE) {
@@ -219,10 +223,10 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         emit PlatformAccountChange(account, platformAccount);
         platformAccount = account;
     }
-    function setAgentManager(address _agentManager) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(_agentManager != address(0), "invalid address");
-        emit AgentManagerChange(_agentManager, agentManager);
-        agentManager = _agentManager;
+    function setAgentNFT(address _agentNFT) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        require(_agentNFT != address(0), "invalid address");
+        emit AgentNFTChange(_agentNFT, agentNFT);
+        agentNFT = _agentNFT;
     }
 
     function setBuyReferrerRewardHolder(address holder) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -262,6 +266,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         } else {
         IVoucher(couponContract).mint(receiver, id, amount, "");
         }
+        referrals[id][receiver] = referrer;
         emit BuyerReferrer(receiver, referrer, id, amount);
     }
 
@@ -294,12 +299,19 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         if (buyReferrerRewardRate > 0) {
             uint referrerReward = totalAmount * buyReferrerRewardRate / HUNDRED_PERCENT;
             TransferHelper.safeTransfer(cms.payToken, buyReferrerRewardHolder, referrerReward);
-            emit Settlement(id, PROFIT_TYPE_BUY_REFERRER, buyReferrerRewardHolder, cms.payToken, referrerReward);
             assignableAmount -= referrerReward;
+            emit Settlement(id, PROFIT_TYPE_BUY_REFERRER, buyReferrerRewardHolder, cms.payToken, referrerReward);
+            emit BuyCouponReferrerLog(id, from, referrals[id][from], cms.payToken, referrerReward);
         }
             if (couponReferrerRewardRate > 0) {
                 uint referrerReward = totalAmount * couponReferrerRewardRate / HUNDRED_PERCENT;
-                address referrerAddress = cms.referrer;
+            address referrerAddress;
+            try
+                IERC721(agentNFT).ownerOf(cms.agentNFTId) returns(address owner) {
+                referrerAddress = owner;
+            } catch (bytes memory) {
+                referrerAddress = platformAccount;
+            }
                 if (referrerAddress == address(0)) {
                     referrerAddress = platformAccount;
                 }
@@ -424,7 +436,7 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
         return this.onERC1155BatchReceived.selector;
     }
 
-    function supportsInterface(bytes4 interfaceId) public override(AccessControl, IERC165) virtual view returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public override(AccessControlUpgradeable, IERC165) virtual view returns (bool) {
         return interfaceId == type(IERC1155Receiver).interfaceId || super.supportsInterface(interfaceId);
     }
 
@@ -436,13 +448,13 @@ contract CornerMarket is CornerMarketStorage, EIP712Base, AccessControl, IERC115
     function _hashCouponMetadata(CouponMetadata memory coupon) private pure returns (bytes32) {
         return keccak256(abi.encode(_COUPON_METADATA, coupon));
     }
-    function take(address token, uint amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function withdraw(address token, uint amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (token == address(0)) {
             TransferHelper.safeTransferETH(msg.sender, amount);
         } else {
             TransferHelper.safeTransfer(token, msg.sender, amount);
         }
-        emit Take(msg.sender, token, amount);
+        emit Withdraw(msg.sender, token, amount);
     }
     function currentId() external view returns(uint) {
         return tokenId.current();

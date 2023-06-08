@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.17;
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 /// @notice EIP712 helpers for permit2
 /// @dev Maintains cross-chain replay protection in the event of a fork
 /// @dev Reference: https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/cryptography/EIP712.sol
-contract EIP712Base {
+contract EIP712Base is Initializable {
     // Cache the domain separator as an immutable value, but also store the chain id that it
     // corresponds to, in order to invalidate the cached domain separator if the chain id changes.
-    bytes32 private immutable _CACHED_DOMAIN_SEPARATOR;
-    uint256 private immutable _CACHED_CHAIN_ID;
+    bytes32 private _CACHED_DOMAIN_SEPARATOR;
+    uint256 private _CACHED_CHAIN_ID;
 
-    bytes32 private immutable _HASHED_NAME;
+    bytes32 private _HASHED_NAME;
     bytes32 private constant _TYPE_HASH =
         keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
 
-    constructor(string memory domainName) {
+    function __EIP712_init(string memory domainName) internal onlyInitializing {
         _CACHED_CHAIN_ID = block.chainid;
         _HASHED_NAME = keccak256(bytes(domainName));
         _CACHED_DOMAIN_SEPARATOR = _buildDomainSeparator(_TYPE_HASH, _HASHED_NAME);
