@@ -35,7 +35,7 @@ contract AgentNFT is AccessControl, ERC721Enumerable {
         return super.supportsInterface(interfaceId);
     }
 
-    function setBaseURI(string calldata _baseURI) external {
+    function setBaseURI(string calldata _baseURI)  external onlyRole(DEFAULT_ADMIN_ROLE) {
         emit BaseURIChange(_baseURI, baseURI);
         baseURI = _baseURI;
     }
